@@ -62,6 +62,31 @@ function joinUrl(baseUrl: string, pathname: string): string {
   return `${baseUrl.replace(/\/+$/, "")}${pathname}`;
 }
 
+function isLoopbackUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+async function executeFetch(
+  ctx: PluginContext,
+  url: string,
+  init?: RequestInit,
+): Promise<any> {
+  if (isLoopbackUrl(url) && typeof globalThis.fetch === "function") {
+    const fetchInit: RequestInit = {
+      ...init,
+      redirect: "error",
+    };
+    return await globalThis.fetch(url, fetchInit);
+  }
+  return await ctx.http.fetch(url, init);
+}
+
 function buildIssueContextPreview(payload: HonchoSessionContextResult): string | null {
   const candidates: string[] = [];
   const summaryText = typeof payload.summary === "string"
@@ -125,7 +150,7 @@ async function requestJson(
     if (apiKey) {
       headers.authorization = `Bearer ${apiKey}`;
     }
-    const res = await ctx.http.fetch(joinUrl(config.honchoApiBaseUrl, pathname), {
+    const res = await executeFetch(ctx, joinUrl(config.honchoApiBaseUrl, pathname), {
       ...init,
       headers: {
         ...headers,

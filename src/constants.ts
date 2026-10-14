@@ -1,7 +1,7 @@
 import type { PluginLauncherRegistration } from "@paperclipai/plugin-sdk";
 
 export const PLUGIN_ID = "honcho-ai.paperclip-honcho";
-export const PLUGIN_VERSION = "0.1.2";
+export const PLUGIN_VERSION = "0.1.3-local.3";
 export const STATE_NAMESPACE = "honcho";
 export const DEFAULT_WORKSPACE_PREFIX = "paperclip";
 export const HONCHO_V3_PATH = "/v3";
@@ -77,20 +77,7 @@ export const ENTITY_TYPES = {
   runtimeFlushCheckpoint: "honcho-runtime-flush-checkpoint",
 } as const;
 
-export const RUNTIME_LAUNCHERS: PluginLauncherRegistration[] = [
-  {
-    id: "honcho-memory-launcher",
-    displayName: "Honcho Memory",
-    placementZone: "globalToolbarButton",
-    action: {
-      type: "openDrawer",
-      target: EXPORT_NAMES.toolbarButton,
-    },
-    render: {
-      environment: "hostOverlay",
-    },
-  },
-];
+export const RUNTIME_LAUNCHERS: PluginLauncherRegistration[] = [];
 
 export const DEFAULT_CONFIG = {
   honchoApiBaseUrl: "https://api.honcho.dev",

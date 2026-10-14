@@ -3,11 +3,12 @@ import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
 import { PLUGIN_VERSION } from "../src/constants.js";
 import manifest from "../src/manifest.js";
 import plugin from "../src/worker.js";
-import { getResolvedConfig } from "../src/config.js";
+import { clearConfigCache, getResolvedConfig } from "../src/config.js";
 import { workspaceIdForCompany } from "../src/ids.js";
 import { BASE_CONFIG, createHonchoHarness, installFetchMock, requestsMatching } from "./helpers.js";
 
 afterEach(() => {
+  clearConfigCache();
   vi.restoreAllMocks();
 });
 
@@ -38,9 +39,7 @@ describe("honcho config", () => {
       expect.objectContaining({ type: "settingsPage", displayName: "Honcho Settings" }),
       expect.objectContaining({ type: "detailTab", displayName: "Memory" }),
     ]));
-    expect(manifest.ui?.launchers).toEqual(expect.arrayContaining([
-      expect.objectContaining({ placementZone: "globalToolbarButton", displayName: "Honcho Memory" }),
-    ]));
+    expect(manifest.ui?.launchers ?? []).toEqual([]);
     expect(manifest.instanceConfigSchema?.properties).toMatchObject({
       observe_me: expect.objectContaining({ title: "Observe Current Agent" }),
       observe_others: expect.objectContaining({ title: "Observe Other Participants" }),
@@ -141,6 +140,7 @@ describe("honcho config", () => {
       },
     });
 
+    clearConfigCache();
     await plugin.definition.setup(harness.ctx);
 
     await expect(harness.performAction("test-connection")).rejects.toThrow("Honcho API key is required");
@@ -156,6 +156,7 @@ describe("honcho config", () => {
       },
     });
 
+    clearConfigCache();
     await plugin.definition.setup(harness.ctx);
 
     const result = await harness.performAction("test-connection");
@@ -177,6 +178,7 @@ describe("honcho config", () => {
       },
     });
 
+    clearConfigCache();
     await plugin.definition.setup(harness.ctx);
 
     const result = await harness.performAction("test-connection");

@@ -15,6 +15,24 @@ import type { HonchoActor, MigrationPreview } from "./types.js";
 
 type EntityType = (typeof ENTITY_TYPES)[keyof typeof ENTITY_TYPES];
 
+// The Paperclip host implements entities.upsert as SELECT-then-INSERT without
+// ON CONFLICT (plugin-registry.ts upsertEntity). Two concurrent upserts for the
+// same (entityType, externalId) — e.g. the settings-page initialize action
+// racing an issue-event sync — both see "no row", both INSERT, and the loser
+// dies on the `plugin_entities_external_idx` unique constraint. The host
+// surfaces that as a JsonRpcCallError ("Failed query: insert into
+// \"plugin_entities\" ...") which bubbles up as a 502 to the UI (observed live
+// on the "Initialize Honcho memory" button, PER-144). Detect exactly that
+// failure shape and retry once: the retry's SELECT finds the winner row and
+// takes the UPDATE path, which cannot race.
+function isEntityInsertRaceError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('insert into "plugin_entities"')
+    || /duplicate key value violates unique constraint/i.test(message);
+}
+
+const ENTITY_UPSERT_RETRY_DELAY_MS = 50;
+
 async function upsertEntity(
   ctx: PluginContext,
   input: {
@@ -27,7 +45,7 @@ async function upsertEntity(
     data: Record<string, unknown>;
   },
 ) {
-  return await ctx.entities.upsert({
+  const params = {
     entityType: input.entityType,
     scopeKind: input.scopeKind,
     scopeId: input.scopeId,
@@ -35,7 +53,14 @@ async function upsertEntity(
     title: input.title ?? undefined,
     status: input.status ?? undefined,
     data: input.data,
-  });
+  };
+  try {
+    return await ctx.entities.upsert(params);
+  } catch (error) {
+    if (!isEntityInsertRaceError(error)) throw error;
+    await new Promise((resolve) => setTimeout(resolve, ENTITY_UPSERT_RETRY_DELAY_MS));
+    return await ctx.entities.upsert(params);
+  }
 }
 
 // Defensive wrapper around ctx.entities.list(): some Paperclip host versions

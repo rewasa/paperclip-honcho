@@ -264,20 +264,7 @@ const manifest: PaperclipPluginManifestV1 = {
         order: 40,
       },
     ],
-    launchers: [
-      {
-        id: "honcho-memory-launcher",
-        displayName: "Honcho Memory",
-        placementZone: "globalToolbarButton",
-        action: {
-          type: "openDrawer",
-          target: EXPORT_NAMES.toolbarButton,
-        },
-        render: {
-          environment: "hostOverlay",
-        },
-      },
-    ],
+    launchers: [],
   },
 };
 

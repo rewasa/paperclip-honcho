@@ -47,7 +47,7 @@ function installFetchStub(options: FetchStubOptions = {}) {
       }
       return new Response(JSON.stringify([{ id: "secret_1", name: "HONCHO_API_KEY", description: null }]), { status: 200 });
     }
-    if (url.endsWith("/config")) {
+    if (url.includes("/config") && !url.includes("/config/test")) {
       if ((init?.method ?? "GET") === "POST") {
         return new Response(JSON.stringify({ ok: true }), { status: 200 });
       }
@@ -635,7 +635,7 @@ describe("HonchoSettingsPage", () => {
     await waitFor(() => expect(screen.getByText("Settings saved.")).toBeTruthy());
 
     const fetchCalls = vi.mocked(fetch).mock.calls;
-    const saveCall = fetchCalls.find(([input, init]) => String(input).endsWith("/config") && (init?.method ?? "GET") === "POST");
+    const saveCall = fetchCalls.find(([input, init]) => String(input).includes("/config") && !String(input).includes("/config/test") && (init?.method ?? "GET") === "POST");
     expect(saveCall).toBeTruthy();
 
     const body = JSON.parse(String(saveCall?.[1]?.body)) as { configJson: { enablePromptContext: boolean; syncIssueComments: boolean; syncIssueDocuments: boolean; enablePeerChat: boolean } };
@@ -655,7 +655,7 @@ describe("HonchoSettingsPage", () => {
     await waitFor(() => expect(screen.getByText("Settings saved.")).toBeTruthy());
 
     const fetchCalls = vi.mocked(fetch).mock.calls;
-    const saveCall = fetchCalls.find(([input, init]) => String(input).endsWith("/config") && (init?.method ?? "GET") === "POST");
+    const saveCall = fetchCalls.find(([input, init]) => String(input).includes("/config") && !String(input).includes("/config/test") && (init?.method ?? "GET") === "POST");
     expect(saveCall).toBeTruthy();
 
     const body = JSON.parse(String(saveCall?.[1]?.body)) as { configJson: Record<string, unknown> };

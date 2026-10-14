@@ -70,6 +70,7 @@ type FetchMockOptions = {
   returnNullOnceOn?: Array<string | RegExp>;
   rateLimitOnceOn?: Array<string | RegExp>;
   delayOn?: Array<{ pattern: string | RegExp; ms: number }>;
+  redirectOn?: Array<string | RegExp>;
   searchResults?: Array<Record<string, unknown>>;
   summaries?: string[];
   chatText?: string;
@@ -139,6 +140,10 @@ export function installFetchMock(options: FetchMockOptions = {}) {
       headers: parseHeaders(init?.headers),
       body: parseBody(init?.body),
     });
+
+    if (init?.redirect === "error" && options.redirectOn?.some((pattern) => matchesPattern(url, pattern))) {
+      return Response.error();
+    }
 
     if (options.failOn?.some((pattern) => matchesPattern(url, pattern))) {
       return new Response(JSON.stringify({ error: "forced failure" }), { status: 500 });

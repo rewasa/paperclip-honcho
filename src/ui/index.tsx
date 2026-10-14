@@ -181,7 +181,7 @@ function sleep(ms: number) {
   });
 }
 
-function useSettingsConfig() {
+function useSettingsConfig(companyId?: string | null) {
   const [configJson, setConfigJson] = useState<SettingsConfig>({ ...DEFAULT_CONFIG });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -189,8 +189,13 @@ function useSettingsConfig() {
 
   useEffect(() => {
     let cancelled = false;
+    if (!companyId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
-    hostFetchJson<{ configJson?: Record<string, unknown> | null } | null>(`/api/plugins/${PLUGIN_ID}/config`)
+    const query = `?companyId=${encodeURIComponent(companyId)}`;
+    hostFetchJson<{ configJson?: Record<string, unknown> | null } | null>(`/api/plugins/${PLUGIN_ID}/config${query}`)
       .then((result) => {
         if (cancelled) return;
         setConfigJson(normalizeSettingsConfig(result?.configJson));
@@ -207,15 +212,18 @@ function useSettingsConfig() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [companyId]);
 
   async function save(nextConfig: SettingsConfig) {
     validateSettingsBeforePersist(nextConfig);
+    if (!companyId) {
+      throw new Error("companyId is required to save configuration");
+    }
     setSaving(true);
     try {
       await hostFetchJson(`/api/plugins/${PLUGIN_ID}/config`, {
         method: "POST",
-        body: JSON.stringify({ configJson: nextConfig }),
+        body: JSON.stringify({ companyId, configJson: nextConfig }),
       });
       setConfigJson(nextConfig);
       setError(null);
@@ -228,9 +236,12 @@ function useSettingsConfig() {
   }
 
   async function test(nextConfig: SettingsConfig) {
+    if (!companyId) {
+      throw new Error("companyId is required to test configuration");
+    }
     return await hostFetchJson<{ valid: boolean; message?: string }>(`/api/plugins/${PLUGIN_ID}/config/test`, {
       method: "POST",
-      body: JSON.stringify({ configJson: nextConfig }),
+      body: JSON.stringify({ companyId, configJson: nextConfig }),
     });
   }
 
@@ -550,11 +561,11 @@ function StatsGrid({ status }: { status: MemoryStatusData | null }) {
 export function HonchoSettingsPage({ context }: PluginSettingsPageProps) {
   const companies = useCompanies();
   const companyId = context.companyId ?? companies[0]?.id ?? null;
-  const settings = useSettingsConfig();
+  const settings = useSettingsConfig(companyId);
   const jobs = usePluginJobs();
-  const memoryStatus = usePluginData<MemoryStatusData>(DATA_KEYS.memoryStatus, companyId ? { companyId } : {});
-  const preview = usePluginData<MigrationPreview | null>(DATA_KEYS.migrationPreview, companyId ? { companyId } : {});
-  const jobStatus = usePluginData<MigrationJobStatusData>(DATA_KEYS.migrationJobStatus, companyId ? { companyId } : {});
+  const memoryStatus = usePluginData<MemoryStatusData>(DATA_KEYS.memoryStatus, companyId ? { companyId } : undefined);
+  const preview = usePluginData<MigrationPreview | null>(DATA_KEYS.migrationPreview, companyId ? { companyId } : undefined);
+  const jobStatus = usePluginData<MigrationJobStatusData>(DATA_KEYS.migrationJobStatus, companyId ? { companyId } : undefined);
   const testConnection = usePluginAction(ACTION_KEYS.testConnection);
   const initializeMemoryForCompany = usePluginAction(ACTION_KEYS.initializeMemoryForCompany);
   const [notice, setNotice] = useState<string | null>(null);
@@ -823,13 +834,26 @@ export function HonchoSettingsPage({ context }: PluginSettingsPageProps) {
 
 export function HonchoIssueMemoryTab({ context }: PluginDetailTabProps) {
   const issueId = context.entityId;
-  const companyId = context.companyId ?? "";
-  const status = usePluginData<IssueMemoryStatusData>(DATA_KEYS.issueStatus, {
-    issueId,
-    companyId,
-  });
+  const companyId = context.companyId ?? null;
+  const status = usePluginData<IssueMemoryStatusData>(
+    DATA_KEYS.issueStatus,
+    companyId ? { issueId, companyId } : undefined,
+  );
   const resyncIssue = usePluginAction(ACTION_KEYS.resyncIssue);
   const issue = status.data;
+
+  if (!companyId) {
+    return (
+      <div style={sectionStyle}>
+        <div style={heroStyle}>
+          <div style={{ fontSize: "1.2rem", fontWeight: 700 }}>Issue memory proof</div>
+          <div style={{ color: "#b91c1c" }}>
+            No company context available for this issue. Please select an organization.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={sectionStyle}>

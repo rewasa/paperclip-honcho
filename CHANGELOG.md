@@ -2,6 +2,11 @@
 
 All notable changes to `@honcho-ai/paperclip-honcho` will be documented in this file.
 
+## [0.1.3-local.3] - 2026-10-01
+
+### Fixed
+- Fixed a 502 on the settings-page **Initialize Honcho memory** button: the Paperclip host implements `entities.upsert` as SELECT-then-INSERT without `ON CONFLICT`, so when the initialize action's mapping repair raced a concurrent event-driven sync writing the same mapping row, the losing INSERT violated `plugin_entities_external_idx` and the raw `Failed query: insert into "plugin_entities" ...` error bubbled up as a 502. Entity upserts now detect exactly that host failure shape and retry once — the retry's lookup finds the winner row and takes the host's UPDATE path, which cannot race.
+
 ## [0.1.3] - 2026-07-09
 
 ### Added

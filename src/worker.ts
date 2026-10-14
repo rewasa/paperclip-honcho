@@ -6,7 +6,7 @@ import {
 } from "@paperclipai/plugin-sdk";
 import manifest from "./manifest.js";
 import { ACTION_KEYS, DATA_KEYS, DEFAULT_SEARCH_LIMIT, JOB_KEYS, RUNTIME_LAUNCHERS, TOOL_NAMES } from "./constants.js";
-import { assertConfigured, getResolvedConfig, resolveConfig, validateConfig } from "./config.js";
+import { assertConfigured, clearConfigCache, getResolvedConfig, resolveConfig, validateConfig } from "./config.js";
 import { createHonchoClient } from "./honcho-client.js";
 import { bootstrapLocalHonchoConfig } from "./local-honcho-config.js";
 import type { HonchoResolvedConfig } from "./types.js";
@@ -48,8 +48,13 @@ function maybeBootstrapLocalHonchoConfig(config: HonchoResolvedConfig): void {
 
 const plugin = definePlugin({
   async setup(ctx) {
-    const initialConfig = await getResolvedConfig(ctx);
-    maybeBootstrapLocalHonchoConfig(initialConfig);
+    let initialConfig: HonchoResolvedConfig;
+    try {
+      initialConfig = await getResolvedConfig(ctx);
+      maybeBootstrapLocalHonchoConfig(initialConfig);
+    } catch {
+      initialConfig = resolveConfig(null);
+    }
     for (const launcher of RUNTIME_LAUNCHERS) {
       ctx.launchers.register(launcher);
     }
@@ -80,16 +85,28 @@ const plugin = definePlugin({
       return await loadIssueStatusData(ctx, issueId, companyId);
     });
 
-    ctx.actions.register(ACTION_KEYS.testConnection, async () => {
-      const config = await getResolvedConfig(ctx);
+    ctx.actions.register(ACTION_KEYS.testConnection, async (params) => {
+      const companyId = (params && typeof params.companyId === "string" && params.companyId.trim())
+        ? params.companyId.trim()
+        : null;
+      let config: HonchoResolvedConfig;
+      if (companyId) {
+        try {
+          config = await getResolvedConfig(ctx, companyId);
+        } catch {
+          config = await getResolvedConfig(ctx, null);
+        }
+      } else {
+        config = await getResolvedConfig(ctx, null);
+      }
       const validation = validateConfig(config);
       if (!validation.ok) {
         throw new Error(validation.errors?.join("; ") ?? "Honcho config is invalid");
       }
-      const companyId = (await ctx.companies.list({ limit: 1, offset: 0 }))[0]?.id ?? null;
-      const company = companyId ? await ctx.companies.get(companyId) : null;
+      const targetCompanyId = companyId ?? ((await ctx.companies.list({ limit: 1, offset: 0 }))[0]?.id ?? null);
+      const company = targetCompanyId ? await ctx.companies.get(targetCompanyId) : null;
       const client = await createHonchoClient({ ctx, config });
-      const { workspaceId } = await client.probeConnection(companyId ?? undefined, company);
+      const { workspaceId } = await client.probeConnection(targetCompanyId ?? undefined, company);
       return {
         ok: true,
         workspaceId,
@@ -168,7 +185,7 @@ const plugin = definePlugin({
 
     ctx.events.on("issue.updated", async (event) => {
       try {
-        const config = await getResolvedConfig(ctx);
+        const config = await getResolvedConfig(ctx, event.companyId);
         if (!config.syncIssueDocuments || !event.entityId) return;
         await syncIssue(ctx, event.entityId, event.companyId, {
           replay: false,
@@ -248,7 +265,7 @@ const plugin = definePlugin({
           parametersSchema: { type: "object", properties: {} },
         },
         async (params, runCtx): Promise<ToolResult> => {
-          const config = await getResolvedConfig(ctx);
+          const config = await getResolvedConfig(ctx, runCtx.companyId);
           if (!config.enablePeerChat) {
             return { error: "Honcho peer chat is disabled in plugin config" };
           }
@@ -384,16 +401,17 @@ const plugin = definePlugin({
         parametersSchema: { type: "object", properties: {} },
       },
       async (params, runCtx): Promise<ToolResult> => {
-        const input = params as Record<string, unknown>;
+        const input = (params ?? {}) as Record<string, unknown>;
         const runId = typeof input.runId === "string" && input.runId.trim().length > 0
           ? input.runId.trim()
           : typeof runCtx.runId === "string" && runCtx.runId.trim().length > 0
             ? runCtx.runId.trim()
             : null;
-        const content = runId ? await getHierarchyContext(ctx, runCtx.companyId, runId) : null;
+        const issueId = inferIssueId(input, runCtx);
+        const content = await getHierarchyContext(ctx, runCtx.companyId, runId ?? "", issueId);
         return {
           content: content ?? "Hierarchy context unavailable on this host.",
-          data: { runId, content },
+          data: { runId, issueId, content },
         };
       },
     );
@@ -408,6 +426,7 @@ const plugin = definePlugin({
   },
 
   async onConfigChanged(newConfig) {
+    clearConfigCache();
     maybeBootstrapLocalHonchoConfig(resolveConfig(newConfig));
   },
 });

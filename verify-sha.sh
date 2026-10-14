@@ -1,0 +1,1 @@
+shasum -a 256 CHANGELOG.md package.json src/config.ts src/constants.ts src/entities.ts src/honcho-client.ts src/manifest.ts src/sync.ts src/ui/index.tsx src/worker.ts tests/config.spec.ts tests/helpers.ts tests/plugin.spec.ts tests/setup.ts tests/tools.spec.ts tests/entity-upsert-race.spec.ts

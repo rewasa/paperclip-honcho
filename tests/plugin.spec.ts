@@ -64,6 +64,14 @@ describe("@honcho-ai/paperclip-honcho smoke", () => {
     });
     expect(status.issueId).toBe("iss_1");
 
+    await expect(
+      harness.getData("issue-memory-status", { issueId: "iss_1", companyId: "" })
+    ).rejects.toThrow("companyId is required");
+
+    await expect(
+      harness.getData("memory-status", { companyId: "" })
+    ).rejects.toThrow("companyId is required");
+
     await harness.performAction("resync-issue", { issueId: "iss_1", companyId: "co_1" });
     await harness.runJob("initialize-memory");
     const connection = await harness.performAction<Record<string, unknown>>("test-connection");
@@ -75,5 +83,59 @@ describe("@honcho-ai/paperclip-honcho smoke", () => {
     expect(memoryStatus.companyStatus).toMatchObject({
       initializationStatus: "complete",
     });
+  });
+
+  it("regression: enforces non-empty companyId on issue-memory-status and memory-status", async () => {
+    installFetchMock();
+    const harness = createHonchoHarness();
+    await plugin.definition.setup(harness.ctx);
+
+    // Missing / empty companyId must throw "companyId is required"
+    await expect(
+      harness.getData("issue-memory-status", { issueId: "iss_1", companyId: "" })
+    ).rejects.toThrow("companyId is required");
+
+    await expect(
+      harness.getData("issue-memory-status", { issueId: "iss_1" })
+    ).rejects.toThrow("companyId is required");
+
+    await expect(
+      harness.getData("memory-status", { companyId: "" })
+    ).rejects.toThrow("companyId is required");
+
+    await expect(
+      harness.getData("memory-status", {})
+    ).rejects.toThrow("companyId is required");
+
+    // Valid companyId passes through
+    const issueStatus = await harness.getData<Record<string, unknown>>("issue-memory-status", {
+      issueId: "iss_1",
+      companyId: "co_1",
+    });
+    expect(issueStatus.issueId).toBe("iss_1");
+
+    const memStatus = await harness.getData<Record<string, unknown>>("memory-status", {
+      companyId: "co_1",
+    });
+    expect(memStatus.companyId).toBe("co_1");
+  });
+
+  it("rejects 3xx redirects on loopback endpoints and enforces redirect error policy", async () => {
+    installFetchMock({
+      redirectOn: ["/v3/workspaces"],
+    });
+
+    const harness = createHonchoHarness({
+      config: {
+        honchoApiBaseUrl: "http://127.0.0.1:8001",
+        honchoApiKey: "",
+      },
+    });
+
+    await plugin.definition.setup(harness.ctx);
+
+    await expect(
+      harness.performAction("test-connection", { companyId: "co_1" })
+    ).rejects.toThrow();
   });
 });

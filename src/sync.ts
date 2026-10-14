@@ -525,7 +525,7 @@ async function buildMigrationCandidates(
   ctx: PluginContext,
   companyId: string,
 ): Promise<MigrationSourceCandidate[]> {
-  const config = await getResolvedConfig(ctx);
+  const config = await getResolvedConfig(ctx, companyId);
   const issues = await listCompanyIssues(ctx, companyId);
   const candidates: MigrationSourceCandidate[] = [];
 
@@ -833,7 +833,7 @@ async function patchJobProgress(
 }
 
 async function buildMemoryStatusData(ctx: PluginContext, companyId: string): Promise<MemoryStatusData> {
-  const config = await getResolvedConfig(ctx);
+  const config = await getResolvedConfig(ctx, companyId);
   const validation = validateConfig(config);
   const [companyStatus, counts, checkpoints, jobs] = await Promise.all([
     getCompanySyncStatus(ctx, companyId),
@@ -1087,7 +1087,7 @@ export async function scanMigrationSources(ctx: PluginContext, companyId: string
 }
 
 export async function importMigrationPreview(ctx: PluginContext, companyId: string) {
-  const config = await getResolvedConfig(ctx);
+  const config = await getResolvedConfig(ctx, companyId);
   const validation = validateConfig(config);
   if (!validation.ok) {
     throw new Error(validation.errors?.join("; ") ?? "Honcho config is invalid");
@@ -1242,7 +1242,7 @@ export async function importMigrationPreview(ctx: PluginContext, companyId: stri
 }
 
 export async function initializeMemory(ctx: PluginContext, companyId: string): Promise<InitializationReport> {
-  const config = await getResolvedConfig(ctx);
+  const config = await getResolvedConfig(ctx, companyId);
   const validation = validateConfig(config);
   if (!validation.ok) {
     await patchCompanySyncStatus(ctx, companyId, {
@@ -1366,7 +1366,7 @@ export async function syncIssue(
   options: SyncIssueOptions = {},
 ): Promise<SyncIssueResult> {
   return await runIssueSyncExclusive(companyId, issueId, async () => {
-    const config = await getResolvedConfig(ctx);
+    const config = await getResolvedConfig(ctx, companyId);
     const status = await getIssueSyncStatus(ctx, issueId);
     const replay = options.replay === true;
     const resources = await fetchIssueResources(ctx, issueId, companyId, config);
@@ -1421,10 +1421,11 @@ export async function syncIssue(
         latestContextPreview: context.preview,
         latestContextFetchedAt: new Date().toISOString(),
       });
+      const currentCompanyStatus = await getCompanySyncStatus(ctx, companyId);
       await patchCompanySyncStatus(ctx, companyId, {
         connectionStatus: "connected",
-        workspaceStatus: "mapped",
-        peerStatus: "partial",
+        workspaceStatus: currentCompanyStatus.workspaceStatus === "created" ? "created" : "mapped",
+        peerStatus: currentCompanyStatus.peerStatus === "complete" ? "complete" : "partial",
         lastSuccessfulSyncAt: new Date().toISOString(),
         lastError: null,
       });
@@ -1470,7 +1471,7 @@ export async function replayIssue(ctx: PluginContext, issueId: string, companyId
 }
 
 export async function loadIssueStatusData(ctx: PluginContext, issueId: string, companyId: string) {
-  const config = await getResolvedConfig(ctx);
+  const config = await getResolvedConfig(ctx, companyId);
   const issue = await ctx.issues.get(issueId, companyId);
   if (!issue) {
     throw new Error("Issue not found");
@@ -1565,7 +1566,7 @@ export async function probePromptContext(
 }
 
 export async function repairMappings(ctx: PluginContext, companyId: string): Promise<RepairMappingsResult> {
-  const config = await getResolvedConfig(ctx);
+  const config = await getResolvedConfig(ctx, companyId);
   const company = await ctx.companies.get(companyId);
   const client = await createHonchoClient({ ctx, config });
   let repaired = 0;
@@ -1610,8 +1611,9 @@ export async function repairMappings(ctx: PluginContext, companyId: string): Pro
     repaired += 1;
   }
 
+  const currentCompanyStatus = await getCompanySyncStatus(ctx, companyId);
   await patchCompanySyncStatus(ctx, companyId, {
-    workspaceStatus: "mapped",
+    workspaceStatus: currentCompanyStatus.workspaceStatus === "created" ? "created" : "mapped",
     peerStatus: agents.length > 0 ? "complete" : "partial",
     lastError: null,
   });
@@ -1623,7 +1625,7 @@ export async function getIssueContext(ctx: PluginContext, issueId: string, compa
   const issue = await ctx.issues.get(issueId, companyId);
   if (!issue) throw new Error("Issue not found");
   const company = await ctx.companies.get(companyId);
-  const config = await getResolvedConfig(ctx);
+  const config = await getResolvedConfig(ctx, companyId);
   const context = await refreshContextPreview(ctx, issue, company, config);
   return {
     ...context,
@@ -1641,7 +1643,7 @@ export async function getWorkspaceContext(
   companyId: string,
   query: string,
 ): Promise<HonchoSearchResult[]> {
-  const config = await getResolvedConfig(ctx);
+  const config = await getResolvedConfig(ctx, companyId);
   const client = await createHonchoClient({ ctx, config });
   return await client.getWorkspaceContext(companyId, agentId, query);
 }
@@ -1652,7 +1654,7 @@ export async function getAgentContext(
   agentId: string,
   issueId?: string | null,
 ) {
-  const config = await getResolvedConfig(ctx);
+  const config = await getResolvedConfig(ctx, companyId);
   const client = await createHonchoClient({ ctx, config });
   return await client.getPeerRepresentation(companyId, agentId, {
     issueId: issueId ?? null,
@@ -1660,11 +1662,112 @@ export async function getAgentContext(
 }
 
 export async function getHierarchyContext(
-  _ctx: PluginContext,
-  _companyId: string,
-  _runId: string,
+  ctx: PluginContext,
+  companyId: string,
+  runId: string,
+  issueId?: string | null,
 ): Promise<string | null> {
-  return null;
+  const issues = await listCompanyIssues(ctx, companyId);
+  if (issues.length === 0) return null;
+
+  const issueById = new Map(issues.map((issue) => [issue.id, issue]));
+  const normalizedIssueId = issueId?.trim() ?? "";
+  const normalizedRunId = runId?.trim() ?? "";
+
+  let targetIssue: Issue | null = null;
+  if (normalizedIssueId) {
+    targetIssue = issues.find(
+      (candidate) => candidate.id === normalizedIssueId || candidate.identifier === normalizedIssueId,
+    ) ?? await ctx.issues.get(normalizedIssueId, companyId);
+  }
+  if (!targetIssue && normalizedRunId) {
+    targetIssue = issues.find(
+      (candidate) => candidate.executionRunId === normalizedRunId || candidate.checkoutRunId === normalizedRunId,
+    ) ?? null;
+  }
+  if (!targetIssue) {
+    const delegatedIssues = issues
+      .filter((candidate) => Boolean(candidate.parentId))
+      .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
+    if (delegatedIssues.length === 0) {
+      return null;
+    }
+    const latestChild = delegatedIssues[0]!;
+    targetIssue = (latestChild.parentId ? issueById.get(latestChild.parentId) : null) ?? latestChild;
+  }
+
+  const agents = await listCompanyAgents(ctx, companyId);
+  const agentNameById = new Map(agents.map((agent) => [agent.id, agent.name]));
+  const formatAssignee = (issue: Issue): string => {
+    if (issue.assigneeAgentId) {
+      return agentNameById.get(issue.assigneeAgentId) ?? issue.assigneeAgentId;
+    }
+    if (issue.assigneeUserId) {
+      return `user:${issue.assigneeUserId}`;
+    }
+    return "unassigned";
+  };
+
+  const resolvePreview = async (issue: Issue, fetchIfMissing: boolean): Promise<string | null> => {
+    const status = await getIssueSyncStatus(ctx, issue.id);
+    if (status.latestContextPreview) return status.latestContextPreview;
+    if (!fetchIfMissing) return null;
+    const fetched = await getIssueContext(ctx, issue.id, companyId).catch(() => null);
+    return fetched?.preview ?? null;
+  };
+
+  const parentIssue = targetIssue.parentId
+    ? (issueById.get(targetIssue.parentId) ?? await ctx.issues.get(targetIssue.parentId, companyId))
+    : null;
+  const childIssues = issues
+    .filter((candidate) => candidate.parentId === targetIssue.id)
+    .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
+  const siblingIssues = parentIssue
+    ? issues
+      .filter((candidate) => candidate.parentId === parentIssue.id && candidate.id !== targetIssue.id)
+      .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())
+    : [];
+
+  const lines: string[] = [];
+  if (parentIssue) {
+    const parentPreview = await resolvePreview(parentIssue, true);
+    lines.push(
+      `Parent issue: ${parentIssue.identifier ?? parentIssue.id} "${parentIssue.title}" [status=${parentIssue.status}, assignee=${formatAssignee(parentIssue)}]`,
+    );
+    if (parentPreview) {
+      lines.push(`Parent memory: ${parentPreview}`);
+    }
+  }
+
+  const targetPreview = await resolvePreview(targetIssue, true);
+  lines.push(
+    `Current issue: ${targetIssue.identifier ?? targetIssue.id} "${targetIssue.title}" [status=${targetIssue.status}, assignee=${formatAssignee(targetIssue)}]`,
+  );
+  if (targetPreview) {
+    lines.push(`Current memory: ${targetPreview}`);
+  }
+
+  if (childIssues.length > 0) {
+    lines.push(`Delegated child issues (${childIssues.length}):`);
+    for (const child of childIssues.slice(0, 10)) {
+      const childPreview = await resolvePreview(child, false);
+      const summarySuffix = childPreview ? ` — ${childPreview.slice(0, 240)}` : "";
+      lines.push(
+        `- ${child.identifier ?? child.id} "${child.title}" [status=${child.status}, assignee=${formatAssignee(child)}]${summarySuffix}`,
+      );
+    }
+  } else if (siblingIssues.length > 0) {
+    lines.push(`Sibling delegated issues (${siblingIssues.length}):`);
+    for (const sibling of siblingIssues.slice(0, 5)) {
+      const siblingPreview = await resolvePreview(sibling, false);
+      const summarySuffix = siblingPreview ? ` — ${siblingPreview.slice(0, 240)}` : "";
+      lines.push(
+        `- ${sibling.identifier ?? sibling.id} "${sibling.title}" [status=${sibling.status}, assignee=${formatAssignee(sibling)}]${summarySuffix}`,
+      );
+    }
+  }
+
+  return lines.join("\n");
 }
 
 export async function searchMemory(
@@ -1673,7 +1776,7 @@ export async function searchMemory(
   companyId: string,
   params: SearchMemoryParams,
 ) {
-  const config = await getResolvedConfig(ctx);
+  const config = await getResolvedConfig(ctx, companyId);
   const client = await createHonchoClient({ ctx, config });
   const scope = params.scope ?? (params.issueId ? "session" : "workspace");
   return await client.searchMemory(companyId, agentId, {
@@ -1687,7 +1790,7 @@ export async function buildPromptContext(
   ctx: PluginContext,
   input: PromptContextBuildInput,
 ): Promise<PromptContextBuildResult | null> {
-  const config = await getResolvedConfig(ctx);
+  const config = await getResolvedConfig(ctx, input.companyId);
   if (!config.enablePromptContext) return null;
   if (!validateConfig(config).ok) return null;
 
@@ -1730,7 +1833,7 @@ export async function buildPromptContext(
     sections.push(`Company workspace recall:\n${workspacePreview}`);
   }
 
-  const hierarchyPreview = await getHierarchyContext(ctx, input.companyId, input.runId).catch(() => null);
+  const hierarchyPreview = await getHierarchyContext(ctx, input.companyId, input.runId, issue?.id ?? null).catch(() => null);
   if (hierarchyPreview) {
     sections.push(`Delegated child memory:\n${hierarchyPreview}`);
     if (issue) {

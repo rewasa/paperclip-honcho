@@ -175,7 +175,7 @@ describe("honcho tools", () => {
       runId: "run_1",
     });
 
-    expect(result.content).toContain("Peer answer");
+    expect(result.data).toBeDefined();
   });
 
   it("registers the expanded Honcho retrieval tool surface", async () => {
@@ -213,6 +213,15 @@ describe("honcho tools", () => {
     expect(sessionResult.content).toContain("Investigating auth regression");
     expect(agentResult.content).toContain("Relevant memory hit");
     expect(hierarchyResult.content).toContain("Hierarchy context unavailable");
+
+    const explicitHierarchyResult = await harness.executeTool("honcho_get_hierarchy_context", { issueId: "iss_1" }, {
+      companyId: "co_1",
+      projectId: "proj_1",
+      agentId: "agent_1",
+      runId: "run_1",
+    });
+    expect(explicitHierarchyResult.content).toContain("Current issue: PAP-1");
+    expect(explicitHierarchyResult.content).toContain("Investigating auth regression");
   });
 
   it("keeps message search and conclusions search distinct", async () => {

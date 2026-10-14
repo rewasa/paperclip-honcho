@@ -58,8 +58,49 @@ export function resolveConfig(config: HonchoPluginConfig | Record<string, unknow
   };
 }
 
-export async function getResolvedConfig(ctx: PluginContext): Promise<HonchoResolvedConfig> {
-  return resolveConfig((await ctx.config.get()) as HonchoPluginConfig);
+const configCache = new Map<string, HonchoResolvedConfig>();
+
+export function clearConfigCache(): void {
+  configCache.clear();
+}
+
+export async function getResolvedConfig(ctx: PluginContext, companyId?: string | null): Promise<HonchoResolvedConfig> {
+  const targetCompanyId = companyId?.trim() || null;
+  const configGetter = ctx.config.get as unknown as (scopeId?: string) => Promise<Record<string, unknown>>;
+  let rawConfig: Record<string, unknown> | null = null;
+  try {
+    const candidate = await ctx.config.get();
+    if (candidate && Object.keys(candidate).length > 0) {
+      if (targetCompanyId) {
+        configCache.set(targetCompanyId, resolveConfig(candidate as HonchoPluginConfig));
+        return configCache.get(targetCompanyId)!;
+      }
+      return resolveConfig(candidate as HonchoPluginConfig);
+    }
+  } catch {
+    // In production host without scope, ctx.config.get() throws
+  }
+  if (targetCompanyId) {
+    try {
+      rawConfig = await configGetter(targetCompanyId);
+    } catch {
+      // In test harness or host error
+    }
+    // Only fall back to the cache when the host could not deliver a config for
+    // this call (scope denied / empty). Never cache that failure itself: a
+    // defaults-resolved config (cloud base URL, no key) cached here would
+    // poison every later properly-scoped call — observed live as the
+    // initialize-memory job failing with "Honcho API key is required" after an
+    // earlier unscoped action call had seeded the cache with defaults.
+    if (rawConfig && Object.keys(rawConfig).length > 0) {
+      const resolved = resolveConfig(rawConfig as HonchoPluginConfig);
+      configCache.set(targetCompanyId, resolved);
+      return resolved;
+    }
+    const cached = configCache.get(targetCompanyId);
+    if (cached) return cached;
+  }
+  return resolveConfig(rawConfig as HonchoPluginConfig);
 }
 
 export function validateConfig(config: HonchoPluginConfig | Record<string, unknown> | HonchoResolvedConfig): PluginConfigValidationResult {
