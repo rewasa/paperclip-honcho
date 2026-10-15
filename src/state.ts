@@ -47,6 +47,21 @@ const EMPTY_COMPANY_STATUS: CompanyMemoryStatus = {
   latestMigrationPreview: null,
 };
 
+const COMPANY_STATUS_KEYS = Object.keys(EMPTY_COMPANY_STATUS) as Array<keyof CompanyMemoryStatus>;
+
+/**
+ * Keeps only known company status keys. Foreign keys (e.g. an issue document
+ * payload that ended up in the stored value) must never be carried along by
+ * the read-merge-write cycle in patchCompanySyncStatus.
+ */
+export function sanitizeCompanyStatus(value: Record<string, unknown>): CompanyMemoryStatus {
+  const picked: Record<string, unknown> = {};
+  for (const key of COMPANY_STATUS_KEYS) {
+    if (key in value) picked[key] = value[key];
+  }
+  return { ...EMPTY_COMPANY_STATUS, ...(picked as Partial<CompanyMemoryStatus>) };
+}
+
 const EMPTY_COMPANY_CHECKPOINT: CompanyMemoryCheckpoint = {
   activeJobKey: null,
   status: "idle",
@@ -128,7 +143,7 @@ export async function getCompanySyncStatus(ctx: PluginContext, companyId: string
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { ...EMPTY_COMPANY_STATUS };
   }
-  return { ...EMPTY_COMPANY_STATUS, ...(value as CompanyMemoryStatus) };
+  return sanitizeCompanyStatus(value as Record<string, unknown>);
 }
 
 export async function patchCompanySyncStatus(
@@ -136,7 +151,7 @@ export async function patchCompanySyncStatus(
   companyId: string,
   patch: Partial<CompanyMemoryStatus>,
 ): Promise<CompanyMemoryStatus> {
-  const next = { ...(await getCompanySyncStatus(ctx, companyId)), ...patch };
+  const next = sanitizeCompanyStatus({ ...(await getCompanySyncStatus(ctx, companyId)), ...patch });
   await ctx.state.set(companyStateKey(companyId), next);
   return next;
 }
