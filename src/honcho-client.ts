@@ -8,6 +8,8 @@ import type {
   AskPeerParams,
   HonchoChatResult,
   HonchoClientInput,
+  HonchoConclusion,
+  HonchoConclusionInput,
   HonchoIssueContext,
   HonchoMessageInput,
   HonchoRepresentationResult,
@@ -620,6 +622,72 @@ export class HonchoClient {
       scope: "workspace",
       limit: DEFAULT_CONTEXT_SUMMARY_LIMIT,
     });
+  }
+
+  async createConclusions(
+    companyId: string,
+    conclusions: HonchoConclusionInput[],
+  ): Promise<HonchoConclusion[]> {
+    if (conclusions.length === 0) return [];
+    const workspaceId = await this.ensureWorkspace(companyId);
+    const payload = await requestJson(
+      this.ctx,
+      this.config,
+      this.apiKey,
+      `${HONCHO_V3_PATH}/workspaces/${encodeURIComponent(workspaceId)}/conclusions`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          conclusions: conclusions.map((conclusion) => ({
+            content: conclusion.content,
+            observer_id: conclusion.observerId,
+            observed_id: conclusion.observedId,
+            session_id: conclusion.sessionId ?? undefined,
+          })),
+        }),
+      },
+    );
+    if (Array.isArray(payload.conclusions)) {
+      return payload.conclusions as HonchoConclusion[];
+    }
+    if (Array.isArray(payload.items)) {
+      return payload.items as HonchoConclusion[];
+    }
+    return conclusions.map((c) => ({
+      content: c.content,
+      observer_id: c.observerId,
+      observed_id: c.observedId,
+      session_id: c.sessionId ?? null,
+    }));
+  }
+
+  async listConclusions(
+    companyId: string,
+    params: {
+      sessionId?: string;
+      observedId?: string;
+      observerId?: string;
+      limit?: number;
+    } = {},
+  ): Promise<HonchoConclusion[]> {
+    const workspaceId = await this.ensureWorkspace(companyId);
+    const query = new URLSearchParams();
+    if (params.sessionId) query.set("session_id", params.sessionId);
+    if (params.observedId) query.set("observed_id", params.observedId);
+    if (params.observerId) query.set("observer_id", params.observerId);
+    if (params.limit) query.set("limit", String(params.limit));
+    const qs = query.toString();
+    const endpoint = `${HONCHO_V3_PATH}/workspaces/${encodeURIComponent(workspaceId)}/conclusions${qs ? `?${qs}` : ""}`;
+    const payload = await requestJson(this.ctx, this.config, this.apiKey, endpoint, {
+      method: "GET",
+    });
+    if (Array.isArray(payload.conclusions)) {
+      return payload.conclusions as HonchoConclusion[];
+    }
+    if (Array.isArray(payload.items)) {
+      return payload.items as HonchoConclusion[];
+    }
+    return [];
   }
 }
 

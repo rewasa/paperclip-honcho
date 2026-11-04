@@ -88,6 +88,9 @@ export type IssueSyncStatus = {
   latestPromptContextPreview: string | null;
   latestPromptContextBuiltAt: string | null;
   latestHierarchyContextPreview?: string | null;
+  latestSynthesizedAt?: string | null;
+  latestSynthesisSummary?: string | null;
+  latestSynthesisConclusionsCount?: number;
 };
 
 export type InitializationReport = {
@@ -262,6 +265,39 @@ export type AskPeerParams = {
   targetPeerId: string;
   query: string;
   issueId?: string;
+};
+
+export type HonchoConclusionInput = {
+  content: string;
+  observerId?: string;
+  observedId?: string;
+  sessionId?: string | null;
+};
+
+export type HonchoConclusion = {
+  id?: string;
+  content: string;
+  observer_id?: string;
+  observed_id?: string;
+  session_id?: string | null;
+  created_at?: string;
+  metadata?: Record<string, unknown> | null;
+};
+
+export type SynthesizeIssueOptions = {
+  summary?: string | null;
+  conclusions?: string[] | null;
+  agentId?: string | null;
+};
+
+export type SynthesizeIssueResult = {
+  issueId: string;
+  issueIdentifier: string | null;
+  sessionId: string;
+  workspaceId: string;
+  conclusions: HonchoConclusion[];
+  summary: string | null;
+  synthesizedAt: string;
 };
 
 export type HonchoIssueContext = {

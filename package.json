@@ -12,7 +12,8 @@
     "url": "https://github.com/plastic-labs/paperclip-honcho/issues"
   },
   "scripts": {
-    "build": "node ./esbuild.config.mjs",
+    "build": "npm run typecheck && npm run test && node ./esbuild.config.mjs",
+    "build:bundle": "node ./esbuild.config.mjs",
     "dev": "node ./esbuild.config.mjs --watch",
     "dev:ui": "paperclip-plugin-dev-server --root . --ui-dir dist/ui --port 4178",
     "test": "vitest run --config ./vitest.config.ts",

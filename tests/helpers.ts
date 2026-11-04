@@ -72,6 +72,7 @@ type FetchMockOptions = {
   delayOn?: Array<{ pattern: string | RegExp; ms: number }>;
   redirectOn?: Array<string | RegExp>;
   searchResults?: Array<Record<string, unknown>>;
+  conclusions?: Array<Record<string, unknown>>;
   summaries?: string[];
   chatText?: string;
   workspaceResponse?: Record<string, unknown>;
@@ -236,6 +237,34 @@ export function installFetchMock(options: FetchMockOptions = {}) {
         messages: (options.summaries ?? ["Investigating auth regression and next steps."]).map((summary) => ({
           role: "assistant",
           content: summary,
+        })),
+      }), { status: 200 });
+    }
+    if (url.includes("/conclusions")) {
+      if (init?.method === "GET") {
+        return new Response(JSON.stringify({
+          conclusions: options.conclusions ?? [
+            {
+              id: "concl_existing_1",
+              content: "Existing session insight",
+              observer_id: "obs_1",
+              observed_id: "obs_2",
+              session_id: "PAP-1",
+              created_at: new Date().toISOString(),
+            },
+          ],
+        }), { status: 200 });
+      }
+      const body = parseBody(init?.body);
+      const incoming = (body?.conclusions as Array<Record<string, unknown>> | undefined) ?? [];
+      return new Response(JSON.stringify({
+        conclusions: incoming.map((c, i) => ({
+          id: `concl_${i + 1}`,
+          content: c.content,
+          observer_id: c.observer_id,
+          observed_id: c.observed_id,
+          session_id: c.session_id,
+          created_at: new Date().toISOString(),
         })),
       }), { status: 200 });
     }
