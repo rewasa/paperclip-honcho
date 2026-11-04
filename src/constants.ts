@@ -65,6 +65,8 @@ export const TOOL_NAMES = {
   getSession: "honcho_get_session",
   getAgentContext: "honcho_get_agent_context",
   getHierarchyContext: "honcho_get_hierarchy_context",
+  synthesizeIssue: "honcho_synthesize_issue",
+  createConclusions: "honcho_create_conclusions",
 } as const;
 
 export const ENTITY_TYPES = {

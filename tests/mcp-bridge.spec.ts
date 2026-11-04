@@ -101,6 +101,8 @@ describe("honcho mcp bridge", () => {
     expect(() => new Function(source.replace(/^#!.*\n/, ""))).not.toThrow();
     expect(source).toContain("honcho_search_memory");
     expect(source).toContain("honcho_ask_peer");
+    expect(source).toContain("honcho_synthesize_issue");
+    expect(source).toContain("honcho_create_conclusions");
     expect(source).toContain("/api/plugins/tools/execute");
   });
 });

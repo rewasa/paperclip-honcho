@@ -246,6 +246,47 @@ const manifest: PaperclipPluginManifestV1 = {
         },
       },
     },
+    {
+      name: TOOL_NAMES.synthesizeIssue,
+      displayName: "Honcho Synthesize Issue",
+      description: "Synthesize and save key conclusions and outcomes for an issue session into Honcho persistent memory.",
+      parametersSchema: {
+        type: "object",
+        properties: {
+          issueId: { type: "string", description: "Optional issue ID or identifier. Defaults to current issue." },
+          summary: { type: "string", description: "Optional summary of what was accomplished or resolved." },
+          conclusions: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional list of distinct conclusions/learnings to store in Honcho.",
+          },
+        },
+      },
+    },
+    {
+      name: TOOL_NAMES.createConclusions,
+      displayName: "Honcho Create Conclusions",
+      description: "Store high-signal conclusions/learnings in Honcho memory for an issue session or peer.",
+      parametersSchema: {
+        type: "object",
+        properties: {
+          issueId: { type: "string", description: "Optional issue ID. Defaults to current issue session." },
+          conclusions: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                content: { type: "string" },
+                observedId: { type: "string" },
+              },
+              required: ["content"],
+            },
+            description: "List of conclusions to record.",
+          },
+        },
+        required: ["conclusions"],
+      },
+    },
   ],
   ui: {
     slots: [

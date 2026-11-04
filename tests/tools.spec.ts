@@ -250,4 +250,60 @@ describe("honcho tools", () => {
       summary_only: true,
     });
   });
+
+  it("synthesizes issue session outcomes into Honcho conclusions", async () => {
+    const { requests } = installFetchMock();
+    const harness = createHonchoHarness();
+
+    await plugin.definition.setup(harness.ctx);
+
+    const result = await harness.executeTool("honcho_synthesize_issue", {
+      issueId: "iss_1",
+      summary: "Fixed token verification and refreshed session cookies",
+      conclusions: ["JWT expiry aligned with cookie maxAge"],
+    }, {
+      companyId: "co_1",
+      projectId: "proj_1",
+      agentId: "agent_1",
+      runId: "run_1",
+    });
+
+    expect(result.content).toContain("Synthesized memory for issue PAP-1");
+    expect(result.content).toContain("Fixed token verification");
+    expect(result.content).toContain("JWT expiry aligned with cookie maxAge");
+
+    const conclusionRequests = requestsMatching(requests, "/conclusions");
+    expect(conclusionRequests).toHaveLength(1);
+    const body = conclusionRequests[0]?.body as { conclusions: Array<Record<string, unknown>> };
+    expect(body.conclusions).toHaveLength(1);
+    expect(body.conclusions[0]?.content).toBe("JWT expiry aligned with cookie maxAge");
+    expect(body.conclusions[0]?.session_id).toBe("PAP-1");
+  });
+
+  it("records direct conclusions for an issue session via honcho_create_conclusions", async () => {
+    const { requests } = installFetchMock();
+    const harness = createHonchoHarness();
+
+    await plugin.definition.setup(harness.ctx);
+
+    const result = await harness.executeTool("honcho_create_conclusions", {
+      issueId: "iss_1",
+      conclusions: [
+        { content: "Redis session store required for multi-pod deployments" },
+      ],
+    }, {
+      companyId: "co_1",
+      projectId: "proj_1",
+      agentId: "agent_1",
+      runId: "run_1",
+    });
+
+    expect(result.content).toContain("Created 1 conclusion(s)");
+
+    const conclusionRequests = requestsMatching(requests, "/conclusions");
+    expect(conclusionRequests).toHaveLength(1);
+    const body = conclusionRequests[0]?.body as { conclusions: Array<Record<string, unknown>> };
+    expect(body.conclusions[0]?.content).toBe("Redis session store required for multi-pod deployments");
+    expect(body.conclusions[0]?.session_id).toBe("PAP-1");
+  });
 });

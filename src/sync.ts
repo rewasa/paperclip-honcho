@@ -64,6 +64,8 @@ import {
 import type {
   DocumentRevision,
   HonchoActor,
+  HonchoConclusion,
+  HonchoConclusionInput,
   HonchoIssueContext,
   HonchoSearchResult,
   NormalizedMessage,
@@ -83,6 +85,8 @@ import type {
   SyncIssueOptions,
   SyncIssueResult,
   SyncableIssueResource,
+  SynthesizeIssueOptions,
+  SynthesizeIssueResult,
 } from "./types.js";
 
 type MigrationCandidatesLoader = (
@@ -1864,4 +1868,140 @@ export async function buildPromptContext(
       agentId: input.agentId,
     },
   };
+}
+
+export async function synthesizeIssue(
+  ctx: PluginContext,
+  issueId: string,
+  companyId: string,
+  options: SynthesizeIssueOptions = {},
+): Promise<SynthesizeIssueResult> {
+  const config = await getResolvedConfig(ctx, companyId);
+  const client = await createHonchoClient({ ctx, config });
+  const issue = await ctx.issues.get(issueId, companyId);
+  if (!issue) {
+    throw new Error(`Issue not found: ${issueId}`);
+  }
+  const company = await ctx.companies.get(companyId);
+  const workspaceId = await client.ensureCompanyWorkspace(companyId, company);
+  const sessionId = await client.ensureIssueSession(issue, company);
+
+  await syncIssue(ctx, issue.id, companyId, { replay: false }).catch((err) => {
+    ctx.logger.warn("Sync before synthesis encountered error", {
+      issueId,
+      companyId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+
+  const sessionContext = await client.getSessionContext(companyId, sessionId, null, issue.id).catch(() => ({
+    issueId: issue.id,
+    issueIdentifier: issue.identifier ?? null,
+    sessionId,
+    workspaceId,
+    summaries: [],
+    context: null,
+    preview: null,
+  }));
+
+  const agentId = options.agentId ?? issue.assigneeAgentId ?? null;
+  let observerPeerId: string;
+  if (agentId) {
+    const agent = await ctx.agents.get(agentId, companyId);
+    observerPeerId = agent
+      ? await client.ensureAgentPeer(companyId, agent)
+      : await client.ensurePeer(companyId, peerIdForAgent(agentId, null));
+  } else {
+    observerPeerId = await client.ensurePeer(companyId, systemPeerId());
+  }
+
+  let observedPeerId: string;
+  if (issue.createdByUserId) {
+    observedPeerId = await client.ensureUserPeer(companyId, issue.createdByUserId);
+  } else if (issue.assigneeAgentId && issue.assigneeAgentId !== agentId) {
+    const assignedAgent = await ctx.agents.get(issue.assigneeAgentId, companyId);
+    observedPeerId = assignedAgent
+      ? await client.ensureAgentPeer(companyId, assignedAgent)
+      : observerPeerId;
+  } else {
+    observedPeerId = observerPeerId;
+  }
+
+  const conclusionTexts: string[] = [];
+  if (Array.isArray(options.conclusions) && options.conclusions.length > 0) {
+    for (const c of options.conclusions) {
+      if (typeof c === "string" && c.trim()) {
+        conclusionTexts.push(c.trim());
+      }
+    }
+  }
+
+  const summaryText = options.summary?.trim() || sessionContext.preview?.trim() || null;
+  if (conclusionTexts.length === 0) {
+    if (summaryText) {
+      conclusionTexts.push(`Issue ${issue.identifier ?? issue.id} (${issue.title}) [status=${issue.status}]: ${summaryText}`);
+    } else {
+      conclusionTexts.push(`Issue ${issue.identifier ?? issue.id} (${issue.title}) completed with status ${issue.status}.`);
+    }
+  }
+
+  const conclusionInputs: HonchoConclusionInput[] = conclusionTexts.map((content) => ({
+    content,
+    observerId: observerPeerId,
+    observedId: observedPeerId,
+    sessionId,
+  }));
+
+  const createdConclusions = await client.createConclusions(companyId, conclusionInputs);
+
+  const synthesizedAt = new Date().toISOString();
+  await patchIssueSyncStatus(ctx, issue.id, {
+    latestSynthesizedAt: synthesizedAt,
+    latestSynthesisSummary: summaryText,
+    latestSynthesisConclusionsCount: createdConclusions.length,
+  });
+
+  return {
+    issueId: issue.id,
+    issueIdentifier: issue.identifier ?? null,
+    sessionId,
+    workspaceId,
+    conclusions: createdConclusions,
+    summary: summaryText,
+    synthesizedAt,
+  };
+}
+
+export async function createConclusionsForIssue(
+  ctx: PluginContext,
+  companyId: string,
+  issueId: string,
+  conclusions: Array<{ content: string; observedId?: string; observerId?: string }>,
+  agentId?: string | null,
+): Promise<HonchoConclusion[]> {
+  const config = await getResolvedConfig(ctx, companyId);
+  const client = await createHonchoClient({ ctx, config });
+  const issue = await ctx.issues.get(issueId, companyId);
+  if (!issue) {
+    throw new Error(`Issue not found: ${issueId}`);
+  }
+  const company = await ctx.companies.get(companyId);
+  await client.ensureCompanyWorkspace(companyId, company);
+  const sessionId = await client.ensureIssueSession(issue, company);
+
+  const fallbackObserverId = agentId
+    ? peerIdForAgent(agentId, null)
+    : systemPeerId();
+  const fallbackObservedId = issue.createdByUserId
+    ? peerIdForUser(issue.createdByUserId)
+    : fallbackObserverId;
+
+  const inputs: HonchoConclusionInput[] = conclusions.map((item) => ({
+    content: item.content,
+    observerId: item.observerId ?? fallbackObserverId,
+    observedId: item.observedId ?? fallbackObservedId,
+    sessionId,
+  }));
+
+  return await client.createConclusions(companyId, inputs);
 }

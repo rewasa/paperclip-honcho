@@ -523,4 +523,76 @@ describe("honcho sync", () => {
     expect(requests.some((request) => JSON.stringify(request.body).includes("SEC-1"))).toBe(true);
   });
 
+  it("triggers synthesis on issue.updated when issue status transitions to done", async () => {
+    const { requests } = installFetchMock();
+    const fixtures = buildDefaultFixtures();
+    const harness = createHonchoHarness({
+      seed: {
+        issues: [
+          {
+            ...fixtures.issues[0],
+            status: "done",
+          },
+        ],
+      },
+    });
+
+    await plugin.definition.setup(harness.ctx);
+    await harness.emit("issue.updated", { key: "design" }, {
+      entityId: "iss_1",
+      entityType: "issue",
+      companyId: "co_1",
+    });
+
+    const conclusionRequests = requestsMatching(requests, "/conclusions");
+    expect(conclusionRequests.length).toBeGreaterThanOrEqual(1);
+    const conclusionBody = conclusionRequests[0]?.body as { conclusions: Array<Record<string, unknown>> };
+    expect(conclusionBody.conclusions.length).toBeGreaterThan(0);
+    expect(conclusionBody.conclusions[0]?.session_id).toBe("PAP-1");
+
+    const state = harness.getState({
+      scopeKind: "issue",
+      scopeId: "iss_1",
+      namespace: "honcho",
+      stateKey: "issue-sync-status",
+    }) as Record<string, unknown>;
+    expect(state.latestSynthesizedAt).toBeTypeOf("string");
+  });
+
+  it("syncs and triggers synthesis on agent.run.finished when associated with a completed issue", async () => {
+    const { requests } = installFetchMock();
+    const fixtures = buildDefaultFixtures();
+    const harness = createHonchoHarness({
+      seed: {
+        issues: [
+          {
+            ...fixtures.issues[0],
+            status: "done",
+            executionRunId: "run_finished_1",
+          },
+        ],
+      },
+    });
+
+    await plugin.definition.setup(harness.ctx);
+    await harness.emit("agent.run.finished", {
+      runId: "run_finished_1",
+      status: "succeeded",
+    }, {
+      entityId: "run_finished_1",
+      entityType: "run",
+      companyId: "co_1",
+    });
+
+    const conclusionRequests = requestsMatching(requests, "/conclusions");
+    expect(conclusionRequests.length).toBeGreaterThanOrEqual(1);
+
+    const state = harness.getState({
+      scopeKind: "issue",
+      scopeId: "iss_1",
+      namespace: "honcho",
+      stateKey: "issue-sync-status",
+    }) as Record<string, unknown>;
+    expect(state.latestSynthesizedAt).toBeTypeOf("string");
+  });
 });

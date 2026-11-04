@@ -3,6 +3,8 @@ import {
   runWorker,
   type ToolRunContext,
   type ToolResult,
+  type PluginContext,
+  type Issue,
 } from "@paperclipai/plugin-sdk";
 import manifest from "./manifest.js";
 import { ACTION_KEYS, DATA_KEYS, DEFAULT_SEARCH_LIMIT, JOB_KEYS, RUNTIME_LAUNCHERS, TOOL_NAMES } from "./constants.js";
@@ -27,6 +29,8 @@ import {
   replayIssue,
   searchMemory,
   syncIssue,
+  synthesizeIssue,
+  createConclusionsForIssue,
 } from "./sync.js";
 
 function requireString(value: unknown, field: string): string {
@@ -38,6 +42,23 @@ function requireString(value: unknown, field: string): string {
 
 function inferIssueId(params: Record<string, unknown>, runCtx?: Partial<ToolRunContext>): string | null {
   if (typeof params.issueId === "string" && params.issueId.trim()) return params.issueId.trim();
+  return null;
+}
+
+async function resolveTargetIssueId(
+  ctx: PluginContext,
+  params: Record<string, unknown>,
+  runCtx: ToolRunContext,
+): Promise<string | null> {
+  const direct = inferIssueId(params, runCtx);
+  if (direct) return direct;
+  if (runCtx.runId && runCtx.companyId) {
+    const issues: Issue[] = await ctx.issues.list({ companyId: runCtx.companyId }).catch(() => []);
+    const matched = issues.find(
+      (candidate: Issue) => candidate.executionRunId === runCtx.runId || candidate.checkoutRunId === runCtx.runId,
+    );
+    if (matched) return matched.id;
+  }
   return null;
 }
 
@@ -185,15 +206,63 @@ const plugin = definePlugin({
 
     ctx.events.on("issue.updated", async (event) => {
       try {
+        if (!event.entityId) return;
         const config = await getResolvedConfig(ctx, event.companyId);
-        if (!config.syncIssueDocuments || !event.entityId) return;
-        await syncIssue(ctx, event.entityId, event.companyId, {
-          replay: false,
-          documentKeyHint: null,
-        });
+        if (config.syncIssueDocuments) {
+          await syncIssue(ctx, event.entityId, event.companyId, {
+            replay: false,
+            documentKeyHint: null,
+          });
+        }
+        const issue = await ctx.issues.get(event.entityId, event.companyId);
+        if (issue && (issue.status === "done" || issue.status === "cancelled")) {
+          await synthesizeIssue(ctx, event.entityId, event.companyId, {
+            agentId: issue.assigneeAgentId ?? null,
+          });
+        }
       } catch (error) {
         ctx.logger.warn("Honcho sync on issue.updated failed", {
           issueId: event.entityId,
+          companyId: event.companyId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+
+    ctx.events.on("agent.run.finished", async (event) => {
+      try {
+        const payload = (typeof event.payload === "object" && event.payload !== null)
+          ? (event.payload as Record<string, unknown>)
+          : {};
+        const runId = typeof payload.runId === "string"
+          ? payload.runId
+          : (event.entityType === "run" ? event.entityId : null);
+        const issueId = typeof payload.issueId === "string"
+          ? payload.issueId
+          : (event.entityType === "issue" ? event.entityId : null);
+
+        let targetIssueId = issueId;
+        if (!targetIssueId && runId) {
+          const companyIssues: Issue[] = await ctx.issues.list({ companyId: event.companyId }).catch(() => []);
+          const matched = companyIssues.find(
+            (candidate: Issue) => candidate.executionRunId === runId || candidate.checkoutRunId === runId,
+          );
+          if (matched) {
+            targetIssueId = matched.id;
+          }
+        }
+
+        if (targetIssueId) {
+          await syncIssue(ctx, targetIssueId, event.companyId, { replay: false });
+          const issue = await ctx.issues.get(targetIssueId, event.companyId);
+          if (issue && (issue.status === "done" || issue.status === "cancelled")) {
+            await synthesizeIssue(ctx, targetIssueId, event.companyId, {
+              agentId: typeof payload.agentId === "string" ? payload.agentId : (issue.assigneeAgentId ?? null),
+            });
+          }
+        }
+      } catch (error) {
+        ctx.logger.warn("Honcho sync on agent.run.finished failed", {
           companyId: event.companyId,
           error: error instanceof Error ? error.message : String(error),
         });
@@ -412,6 +481,73 @@ const plugin = definePlugin({
         return {
           content: content ?? "Hierarchy context unavailable on this host.",
           data: { runId, issueId, content },
+        };
+      },
+    );
+
+    ctx.tools.register(
+      TOOL_NAMES.synthesizeIssue,
+      manifest.tools?.find((tool) => tool.name === TOOL_NAMES.synthesizeIssue) ?? {
+        displayName: "Honcho Synthesize Issue",
+        description: "Synthesize and save key conclusions and outcomes for an issue session into Honcho persistent memory.",
+        parametersSchema: { type: "object", properties: {} },
+      },
+      async (params, runCtx): Promise<ToolResult> => {
+        const input = (params ?? {}) as Record<string, unknown>;
+        const issueId = await resolveTargetIssueId(ctx, input, runCtx);
+        if (!issueId) return { error: "issueId is required" };
+        const summary = typeof input.summary === "string" ? input.summary : undefined;
+        const conclusions = Array.isArray(input.conclusions)
+          ? input.conclusions.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+          : undefined;
+        const result = await synthesizeIssue(ctx, issueId, runCtx.companyId, {
+          summary,
+          conclusions,
+          agentId: runCtx.agentId,
+        });
+        const content = [
+          `Synthesized memory for issue ${result.issueIdentifier ?? result.issueId}:`,
+          result.summary ? `Summary: ${result.summary}` : null,
+          result.conclusions.length > 0
+            ? `Recorded conclusions:\n${result.conclusions.map((c, i) => `${i + 1}. ${c.content}`).join("\n")}`
+            : null,
+        ].filter(Boolean).join("\n\n");
+        return {
+          content,
+          data: result,
+        };
+      },
+    );
+
+    ctx.tools.register(
+      TOOL_NAMES.createConclusions,
+      manifest.tools?.find((tool) => tool.name === TOOL_NAMES.createConclusions) ?? {
+        displayName: "Honcho Create Conclusions",
+        description: "Store high-signal conclusions/learnings in Honcho memory for an issue session or peer.",
+        parametersSchema: { type: "object", properties: {} },
+      },
+      async (params, runCtx): Promise<ToolResult> => {
+        const input = (params ?? {}) as Record<string, unknown>;
+        const issueId = await resolveTargetIssueId(ctx, input, runCtx);
+        if (!issueId) return { error: "issueId is required" };
+        const items = Array.isArray(input.conclusions)
+          ? (input.conclusions as Array<{ content: string; observedId?: string; observerId?: string }>)
+          : typeof input.content === "string"
+            ? [{ content: input.content }]
+            : [];
+        if (items.length === 0) {
+          return { error: "At least one conclusion is required" };
+        }
+        const created = await createConclusionsForIssue(
+          ctx,
+          runCtx.companyId,
+          issueId,
+          items,
+          runCtx.agentId,
+        );
+        return {
+          content: `Created ${created.length} conclusion(s) in Honcho memory.`,
+          data: { conclusions: created },
         };
       },
     );

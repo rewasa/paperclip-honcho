@@ -7,7 +7,7 @@ import type { HonchoResolvedConfig } from "./types.js";
 // Bump whenever buildBridgeScriptSource()'s behavior changes so existing
 // agent runtime homes pick up the new version instead of staying frozen on
 // whatever was written the first time repairMappings ran.
-export const MCP_BRIDGE_VERSION = "2";
+export const MCP_BRIDGE_VERSION = "3";
 
 export const BRIDGE_SCRIPT_FILENAME = "paperclip-honcho-mcp-bridge.cjs";
 const MCP_SERVER_KEY = "paperclip_honcho";
@@ -46,13 +46,33 @@ const https = require("https");
 const PLUGIN_TOOL_PREFIX = ${JSON.stringify(PLUGIN_ID)};
 const TOOLS = ${toolDeclarationsJson()};
 
-const PAPERCLIP_API_URL = (process.env.PAPERCLIP_API_URL || "").replace(/\\/+$/, "");
+const PAPERCLIP_API_URL = (process.env.PAPERCLIP_API_URL || "").replace(/[/]+$/, "");
 const PAPERCLIP_API_KEY = process.env.PAPERCLIP_API_KEY || "";
 const PAPERCLIP_AGENT_ID = process.env.PAPERCLIP_AGENT_ID || "";
 const PAPERCLIP_COMPANY_ID = process.env.PAPERCLIP_COMPANY_ID || "";
 const PAPERCLIP_RUN_ID = process.env.PAPERCLIP_RUN_ID || "";
+const PAPERCLIP_ISSUE_ID = process.env.PAPERCLIP_ISSUE_ID || "";
 
 let cachedProjectId = process.env.PAPERCLIP_PROJECT_ID || null;
+let cachedIssueId = PAPERCLIP_ISSUE_ID || null;
+
+async function resolveIssueId() {
+  if (cachedIssueId) return cachedIssueId;
+  if (!PAPERCLIP_COMPANY_ID) return null;
+  try {
+    const issues = await paperclipRequest(
+      "/api/companies/" + encodeURIComponent(PAPERCLIP_COMPANY_ID) + "/issues",
+      "GET",
+    );
+    const list = Array.isArray(issues) ? issues : Array.isArray(issues && issues.items) ? issues.items : [];
+    const matched = list.find((i) => (PAPERCLIP_RUN_ID && (i.executionRunId === PAPERCLIP_RUN_ID || i.checkoutRunId === PAPERCLIP_RUN_ID)));
+    if (matched && matched.id) {
+      cachedIssueId = matched.id;
+      return cachedIssueId;
+    }
+  } catch (_) {}
+  return null;
+}
 
 function paperclipRequest(requestPath, method, body) {
   return new Promise((resolve, reject) => {
@@ -177,6 +197,12 @@ async function handleRequest(message) {
         sendError(id, -32602, "Missing tool name");
         return;
       }
+      if (!args.issueId && (name === "honcho_synthesize_issue" || name === "honcho_create_conclusions" || name === "honcho_get_issue_context" || name === "honcho_get_session")) {
+        try {
+          const autoIssueId = await resolveIssueId();
+          if (autoIssueId) args.issueId = autoIssueId;
+        } catch (_) {}
+      }
       try {
         const result = await callPluginTool(name, args);
         const text = typeof result.content === "string"
@@ -256,6 +282,7 @@ const FORWARDED_ENV_VARS = [
   "PAPERCLIP_COMPANY_ID",
   "PAPERCLIP_RUN_ID",
   "PAPERCLIP_PROJECT_ID",
+  "PAPERCLIP_ISSUE_ID",
 ];
 
 function buildBridgeTomlBlock(scriptAbsolutePath: string): string {
